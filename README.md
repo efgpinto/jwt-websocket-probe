@@ -36,7 +36,7 @@ Read `exp` from the claims and complete the `Flow` at that time. Completing the 
 @WebSocket("/my-socket")
 public Flow<String, String, NotUsed> socket() {
   var claims = requestContext().getJwtClaims();
-  // Read "exp" from asMap(). See "Known limitations".
+  // Read "exp" from asMap(). See "Implementation notes".
   var exp = Optional.ofNullable(claims.asMap().get("exp"))
     .map(raw -> Instant.ofEpochSecond(Long.parseLong(raw)));
   var flow = Flow.of(String.class).map(this::handle);
@@ -71,7 +71,7 @@ Ticket rules in this sample:
 - A ticket works once. A second attempt with the same ticket is refused, also when the service runs on more than one instance.
 - A ticket must be used within 30 seconds, or before the token's `exp` if that comes first. Set the time with `probe.ws-ticket.ttl` in `application.conf`.
 - A used ticket is deleted. An unused ticket is deleted automatically after it expires (`expireAfter` on the Key Value Entity).
-- When a ticket is missing, unknown, used, or expired, the connection opens, the service sends `rejected: invalid ticket` (or `rejected: missing ticket`), and then closes the connection. See "Known limitations" for why it does not return an HTTP error.
+- When a ticket is missing, unknown, used, or expired, the connection opens, the service sends `rejected: invalid ticket` (or `rejected: missing ticket`), and then closes the connection. See "Implementation notes" for why it does not return an HTTP error.
 - When the service cannot check a ticket, for example after a timeout, it sends `rejected: temporarily unavailable, try again` and closes. The ticket may already be used, so the client gets a new ticket and reconnects.
 - `POST /ws-ticket` returns 201 with the ticket. If the service cannot store the ticket, it returns 503. The client then calls again. A ticket is returned only after it is stored, so a client never receives a ticket that does not work.
 
@@ -113,17 +113,17 @@ In this sample: `ticketWithTokenSocket()` in [`WsTicketEndpoint`](src/main/java/
 
 If the downstream services are other Akka services, check first whether you need the user's token at all. Service-to-service access control (`@Acl`) plus the subject from the ticket is often enough.
 
-## Known limitations (Akka SDK 3.6.6)
+## Implementation notes (Akka SDK 3.6.6)
 
-**`JwtClaims.expirationTime()` returns empty.** The same applies to `issuedAt()`, `notBefore()` and other claims that are not strings, such as `getLong()`. Read the raw value from `asMap()` instead, as this sample does in [`TokenLifetime`](src/main/java/com/example/domain/TokenLifetime.java).
+**Read `exp` from `asMap()`.** In SDK 3.6.6, `JwtClaims.expirationTime()` returns empty. So do `issuedAt()`, `notBefore()` and the other getters for claims that are not strings, such as `getLong()`. This sample reads the raw value from `asMap()` in [`TokenLifetime`](src/main/java/com/example/domain/TokenLifetime.java).
 
-**An `HttpException` thrown from a `@WebSocket` method returns 500.** For example, `HttpException.forbidden()` gives 500, not 403. To refuse a connection with a clear reason, return a `Flow` that sends the reason and completes. `/ws/ticket-throws` in this sample shows the current behavior.
+**Refuse a WebSocket connection by completing the `Flow`.** An `HttpException` thrown from a `@WebSocket` method returns 500, whatever status it carries. To refuse a connection with a clear reason, return a `Flow` that sends the reason and completes. `/ws/ticket-throws` shows the behavior of a thrown exception.
 
-**Tokens without `exp` have no deadline.** The connection stays open until the client closes it or the platform's connection limit ends it.
+**Tokens without `exp`.** A connection opened with a token that has no `exp` stays open until the client closes it or the platform's connection limit ends it.
 
-**`WebSocketRouteTester` cannot set headers.** To test a `@JWT` WebSocket method, use an akka-http WebSocket client. See [`WsTestClient`](src/test/java/com/example/api/WsTestClient.java).
+**Testing `@JWT` WebSocket methods.** The test kit's `WebSocketRouteTester` does not set request headers. To send an `Authorization` header in tests, use an akka-http WebSocket client, as [`WsTestClient`](src/test/java/com/example/api/WsTestClient.java) does.
 
-**Unit tests do not run with the parent POM's default surefire version.** `mvn test` finds no JUnit 5 tests and still reports success. This sample sets `maven-surefire-plugin.version` to 3.1.2 in `pom.xml`. Remove the override when you upgrade to an SDK version that includes the fix.
+**Surefire version.** This sample sets `maven-surefire-plugin.version` to 3.1.2 in `pom.xml`, so that `mvn test` runs the JUnit 5 unit tests. Without it, `mvn test` finds no tests and still reports success. Remove the override when you upgrade to an SDK version that sets it.
 
 ## Endpoints
 
