@@ -31,15 +31,30 @@ public class WsTicketTest {
 
   @Test
   public void timeToLiveIsTheTimeLeftUntilValidUntil() {
-    var ticket = new WsTicket("alice", now.plusSeconds(30), Optional.empty());
+    var ticket = new WsTicket("alice", now.plusSeconds(30), Optional.empty(), Optional.empty());
 
     assertThat(ticket.timeToLive(now)).isEqualTo(Duration.ofSeconds(30));
   }
 
   @Test
   public void timeToLiveIsNeverZeroOrNegative() {
-    var ticket = new WsTicket("alice", now.minusSeconds(5), Optional.empty());
+    var ticket = new WsTicket("alice", now.minusSeconds(5), Optional.empty(), Optional.empty());
 
     assertThat(ticket.timeToLive(now)).isEqualTo(Duration.ofSeconds(1));
+  }
+
+  @Test
+  public void isIssuedForTheTokenWithTheStoredHash() {
+    var ticket = new WsTicket("alice", now, Optional.empty(), Optional.of(TokenHash.of("jwt-a")));
+
+    assertThat(ticket.isIssuedFor("jwt-a")).isTrue();
+    assertThat(ticket.isIssuedFor("jwt-b")).isFalse();
+  }
+
+  @Test
+  public void isNotIssuedForAnyTokenWithoutAHash() {
+    var ticket = new WsTicket("alice", now, Optional.empty(), Optional.empty());
+
+    assertThat(ticket.isIssuedFor("jwt-a")).isFalse();
   }
 }

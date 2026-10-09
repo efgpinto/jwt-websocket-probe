@@ -18,13 +18,23 @@ import java.util.Optional;
 @Component(id = "ws-ticket")
 public class WsTicketEntity extends KeyValueEntity<WsTicket> {
 
-  public record Issue(String subject, Instant validUntil, Optional<Instant> tokenExpiresAt) {}
+  public record Issue(
+    String subject,
+    Instant validUntil,
+    Optional<Instant> tokenExpiresAt,
+    Optional<String> tokenHash
+  ) {}
 
   public Effect<Done> issue(Issue command) {
     if (currentState() != null || isDeleted()) {
       return effects().error("ticket already exists");
     }
-    var ticket = new WsTicket(command.subject(), command.validUntil(), command.tokenExpiresAt());
+    var ticket = new WsTicket(
+      command.subject(),
+      command.validUntil(),
+      command.tokenExpiresAt(),
+      command.tokenHash()
+    );
     return effects()
       .updateState(ticket)
       .expireAfter(ticket.timeToLive(Instant.now()))

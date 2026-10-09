@@ -10,13 +10,24 @@ import java.util.Optional;
  * @param subject "sub" claim of the JWT that was used to issue the ticket
  * @param validUntil the ticket must be redeemed before this time
  * @param tokenExpiresAt "exp" claim of that JWT. The WebSocket must close at this time.
+ * @param tokenHash SHA-256 of that JWT (see {@link TokenHash}). The JWT itself is never stored.
  */
-public record WsTicket(String subject, Instant validUntil, Optional<Instant> tokenExpiresAt) {
+public record WsTicket(
+  String subject,
+  Instant validUntil,
+  Optional<Instant> tokenExpiresAt,
+  Optional<String> tokenHash
+) {
 
   private static final Duration MIN_TIME_TO_LIVE = Duration.ofSeconds(1);
 
   public boolean isExpired(Instant now) {
     return !now.isBefore(validUntil);
+  }
+
+  /** True when the token is the one this ticket was issued for. */
+  public boolean isIssuedFor(String token) {
+    return tokenHash.map(hash -> TokenHash.matches(hash, token)).orElse(false);
   }
 
   /** How long to keep the stored ticket. Never zero or negative. */

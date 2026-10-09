@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import akka.Done;
 import akka.javasdk.testkit.KeyValueEntityTestKit;
+import com.example.domain.TokenHash;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -12,7 +13,12 @@ import org.junit.jupiter.api.Test;
 public class WsTicketEntityTest {
 
   private static WsTicketEntity.Issue issue(Instant validUntil) {
-    return new WsTicketEntity.Issue("alice", validUntil, Optional.of(validUntil.plusSeconds(60)));
+    return new WsTicketEntity.Issue(
+      "alice",
+      validUntil,
+      Optional.of(validUntil.plusSeconds(60)),
+      Optional.of(TokenHash.of("the-jwt"))
+    );
   }
 
   @Test
@@ -36,6 +42,7 @@ public class WsTicketEntityTest {
 
     assertThat(first.isError()).isFalse();
     assertThat(first.getReply().subject()).isEqualTo("alice");
+    assertThat(first.getReply().isIssuedFor("the-jwt")).isTrue();
     assertThat(first.stateWasDeleted()).isTrue();
     assertThat(testKit.isDeleted()).isTrue();
 

@@ -3,9 +3,9 @@
 This sample shows how `@JWT(validate = JWT.JwtMethodMode.BEARER_TOKEN)` works on a `@WebSocket` method in an Akka HTTP endpoint. It also shows two patterns for long-lived connections:
 
 - **Close at token expiry:** for clients that can set the `Authorization` header.
-- **Ticket:** for browser clients, which cannot set headers on a WebSocket.
+- **Ticket:** for browser clients, which cannot set headers on a WebSocket. A variant also gives the WebSocket handler the user's JWT, for when it must forward the token to downstream services.
 
-The sample was tested with Akka SDK 3.6.6, locally and on a deployed service.
+The sample was tested with Akka SDK 3.6.6. The `@JWT` behavior, pattern 1, and the basic ticket flow were also checked on a deployed service.
 
 ## How `@JWT` works on a WebSocket method
 
@@ -61,7 +61,7 @@ The browser `WebSocket` API cannot set request headers. `new WebSocket(url, { he
 With a ticket, the token is still validated by `@JWT`, so the service needs no JWT signature code:
 
 1. The client sends `POST /ws-ticket` with `Authorization: Bearer <token>`. `fetch` can set this header. `@JWT` validates the token.
-2. The service returns a random ticket. The ticket stores the token's subject and `exp`.
+2. The service returns a random ticket. The ticket stores the token's subject, its `exp`, and a SHA-256 hash of the token. The token itself is not stored.
 3. The client opens `/ws/ticket?ticket=<ticket>` with the plain `WebSocket` API.
 4. The service redeems the ticket and opens the connection. The connection closes at the token's `exp`.
 5. To reconnect, the client gets a new ticket with a valid token.
@@ -90,6 +90,29 @@ In this sample: [`WsTicketEndpoint`](src/main/java/com/example/api/WsTicketEndpo
 
 The ticket is part of the URL, so it can appear in access logs. It is short-lived and works only once, so a logged ticket cannot be reused.
 
+### When the handler must forward the token downstream
+
+With a ticket, the WebSocket connection carries no JWT. If your WebSocket handler calls other services with the user's token, use `/ws/ticket-with-token` instead of `/ws/ticket`:
+
+1. The client gets a ticket with `POST /ws-ticket`, as above.
+2. The client opens `/ws/ticket-with-token?ticket=<ticket>`.
+3. The client sends the same JWT as the first message.
+4. The service hashes that message and compares it with the hash in the ticket. `@JWT` already validated this exact token on `POST /ws-ticket`, so no signature check is needed.
+5. The handler keeps the token in memory for this connection and uses it for downstream calls. The connection closes at the token's `exp`, so the handler never forwards an expired token.
+
+```js
+const ws = new WebSocket(`wss://${location.host}/ws/ticket-with-token?ticket=${ticket}`);
+ws.onopen = () => ws.send(token); // first message: the JWT used for POST /ws-ticket
+```
+
+The connection is refused with `rejected: token does not match ticket` when the first message is a different token, and with `rejected: no token received` when no message arrives within 5 seconds (`probe.ws-ticket.first-message-timeout`).
+
+The token is sent only once per connection, over the encrypted `wss://` connection, and it is never stored. This is why the ticket keeps only a hash.
+
+In this sample: `ticketWithTokenSocket()` in [`WsTicketEndpoint`](src/main/java/com/example/api/WsTicketEndpoint.java). The handler shows where to add the downstream call. It only reports a fingerprint of the token, to show that the token is available.
+
+If the downstream services are other Akka services, check first whether you need the user's token at all. Service-to-service access control (`@Acl`) plus the subject from the ticket is often enough.
+
 ## Known limitations (Akka SDK 3.6.6)
 
 **`JwtClaims.expirationTime()` returns empty.** The same applies to `issuedAt()`, `notBefore()` and other claims that are not strings, such as `getLong()`. Read the raw value from `asMap()` instead, as this sample does in [`TokenLifetime`](src/main/java/com/example/domain/TokenLifetime.java).
@@ -110,6 +133,7 @@ The ticket is part of the URL, so it can appear in access logs. It is short-live
 | `/ws/echo-until-exp` | Pattern 1. Same as `/ws/echo`, and closes at the token's `exp`. |
 | `POST /ws-ticket` | Pattern 2. `@JWT`. Returns 201 with a ticket, or 503 when the ticket cannot be stored. |
 | `/ws/ticket?ticket=...` | Pattern 2. Opens with a ticket, and closes at the token's `exp`. |
+| `/ws/ticket-with-token?ticket=...` | Pattern 2, forwarding variant. Expects the JWT as the first message, and keeps it for downstream calls. |
 | `/ws/ticket-throws` | Throws `HttpException.forbidden()` from a WebSocket method. |
 
 ## Run the tests
@@ -139,6 +163,8 @@ Get a ticket and connect the way a browser does:
 ```shell
 node scripts/ticket-probe.mjs http://localhost:9000 4
 ```
+
+The ticket script also runs the forwarding variant: it opens `/ws/ticket-with-token` and sends the JWT as the first message.
 
 The scripts need Node 22 or later.
 
