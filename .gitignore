@@ -31,3 +31,7 @@ akka-context/
 .git-bak
 
 .github-bak
+
+# Keys from scripts/generate-key.mjs
+probe-es256.pem
+jwks.json

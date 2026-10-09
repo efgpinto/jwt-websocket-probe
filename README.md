@@ -1,75 +1,110 @@
-# JWT WebSocket probe
+# JWT authentication for WebSocket endpoints
 
-This service tests how `@JWT(validate = JWT.JwtMethodMode.BEARER_TOKEN)` behaves on an HTTP endpoint `@WebSocket` method.
+This sample shows how `@JWT(validate = JWT.JwtMethodMode.BEARER_TOKEN)` works on a `@WebSocket` method in an Akka HTTP endpoint. It also shows two patterns for long-lived connections:
+
+- **Close at token expiry:** for clients that can set the `Authorization` header.
+- **Ticket:** for browser clients, which cannot set headers on a WebSocket.
+
+The sample was tested with Akka SDK 3.6.6, locally and on a deployed service.
+
+## How `@JWT` works on a WebSocket method
+
+`@JWT` validates the token once, on the HTTP request that opens the WebSocket. After the connection opens, messages go to your `Flow` with no further token checks.
+
+| Situation | Result |
+| --- | --- |
+| Valid token in `Authorization: Bearer <token>` | The connection opens. |
+| No `Authorization` header | 400. The connection does not open. |
+| Token in a query parameter, such as `?access_token=` | 400. `@JWT` reads only the `Authorization` header. |
+| Token in the `Sec-WebSocket-Protocol` header | 400. `@JWT` reads only the `Authorization` header. |
+| Expired token, bad signature, or malformed token | 403. The connection does not open. |
+| The token expires while the connection is open | The connection stays open, and messages still go through. |
+| A new connection with the same expired token | 403 |
+
+Inside the WebSocket method, `requestContext().getJwtClaims()` returns the claims of the token used to open the connection. The claims do not change while the connection is open.
+
+To end a connection when its token expires, use one of the patterns below.
+
+## Pattern 1: close the connection at token expiry
+
+Use this pattern when the client can set the `Authorization` header. Native mobile apps and backend clients can do this.
+
+Read `exp` from the claims and complete the `Flow` at that time. Completing the `Flow` closes the WebSocket with code 1000. The client then reconnects with a new token.
+
+```java
+@JWT(validate = JWT.JwtMethodMode.BEARER_TOKEN)
+@WebSocket("/my-socket")
+public Flow<String, String, NotUsed> socket() {
+  var claims = requestContext().getJwtClaims();
+  // Read "exp" from asMap(). See "Known limitations".
+  var exp = Optional.ofNullable(claims.asMap().get("exp"))
+    .map(raw -> Instant.ofEpochSecond(Long.parseLong(raw)));
+  var flow = Flow.of(String.class).map(this::handle);
+  return exp
+    .map(e -> flow.takeWithin(Duration.between(Instant.now(), e)))
+    .orElse(flow);
+}
+```
+
+In this sample: `/ws/echo-until-exp` in [`JwtProbeEndpoint`](src/main/java/com/example/api/JwtProbeEndpoint.java).
+
+Your clients need reconnect logic in any case, because the platform also closes WebSocket connections from time to time.
+
+## Pattern 2: ticket for browser clients
+
+The browser `WebSocket` API cannot set request headers. `new WebSocket(url, { headers })` fails, and a connection without the header gets 400 from `@JWT`. The browser does not show that status: the connection only fails with close code 1006.
+
+With a ticket, the token is still validated by `@JWT`, so the service needs no JWT signature code:
+
+1. The client sends `POST /ws-ticket` with `Authorization: Bearer <token>`. `fetch` can set this header. `@JWT` validates the token.
+2. The service returns a random ticket. The ticket stores the token's subject and `exp`.
+3. The client opens `/ws/ticket?ticket=<ticket>` with the plain `WebSocket` API.
+4. The service redeems the ticket and opens the connection. The connection closes at the token's `exp`.
+5. To reconnect, the client gets a new ticket with a valid token.
+
+Ticket rules in this sample:
+
+- A ticket works once. A second attempt with the same ticket is refused, also when the service runs on more than one instance.
+- A ticket must be used within 30 seconds, or before the token's `exp` if that comes first. Set the time with `probe.ws-ticket.ttl` in `application.conf`.
+- A used ticket is deleted. An unused ticket is deleted automatically after it expires (`expireAfter` on the Key Value Entity).
+- When a ticket is missing, unknown, used, or expired, the connection opens, the service sends `rejected: <reason>`, and then closes the connection. See "Known limitations" for why it does not return an HTTP error.
+
+What the browser code looks like:
+
+```js
+const res = await fetch("/ws-ticket", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}` },
+});
+const { ticket } = await res.json();
+const ws = new WebSocket(`wss://${location.host}/ws/ticket?ticket=${ticket}`);
+```
+
+In this sample: [`WsTicketEndpoint`](src/main/java/com/example/api/WsTicketEndpoint.java) and [`WsTicketEntity`](src/main/java/com/example/application/WsTicketEntity.java).
+
+The ticket is part of the URL, so it can appear in access logs. It is short-lived and works only once, so a logged ticket cannot be reused.
+
+## Known limitations (Akka SDK 3.6.6)
+
+**`JwtClaims.expirationTime()` returns empty.** The same applies to `issuedAt()`, `notBefore()` and other claims that are not strings, such as `getLong()`. Read the raw value from `asMap()` instead, as this sample does in [`TokenLifetime`](src/main/java/com/example/domain/TokenLifetime.java).
+
+**An `HttpException` thrown from a `@WebSocket` method returns 500.** For example, `HttpException.forbidden()` gives 500, not 403. To refuse a connection with a clear reason, return a `Flow` that sends the reason and completes. `/ws/ticket-throws` in this sample shows the current behavior.
+
+**Tokens without `exp` have no deadline.** The connection stays open until the client closes it or the platform's connection limit ends it.
+
+**`WebSocketRouteTester` cannot set headers.** To test a `@JWT` WebSocket method, use an akka-http WebSocket client. See [`WsTestClient`](src/test/java/com/example/api/WsTestClient.java).
+
+**Unit tests do not run with the parent POM's default surefire version.** `mvn test` finds no JUnit 5 tests and still reports success. This sample sets `maven-surefire-plugin.version` to 3.1.2 in `pom.xml`. Remove the override when you upgrade to an SDK version that includes the fix.
 
 ## Endpoints
 
-| Path | Behavior |
+| Path | Description |
 | --- | --- |
-| `/ws/echo` | `@JWT` only. Echoes each message as JSON, with the claims and whether the token has expired since the handshake. |
-| `/ws/echo-until-exp` | Same, but the Flow completes at the `exp` claim. Completing the Flow closes the WebSocket. |
-| `POST /ws-ticket` | `@JWT`. Returns a random, single-use ticket for `/ws/ticket`. |
-| `/ws/ticket?ticket=...` | No `@JWT`. Redeems the ticket, echoes messages, and closes at the JWT's `exp`. |
-| `/ws/ticket-throws` | Throws `HttpException.forbidden()`. Shows that the runtime returns 500 instead of 403. |
-
-## Results
-
-Tested with Akka SDK 3.6.6 (runtime 1.6.17) in three ways:
-- the integration tests (`mvn verify`)
-- the service running locally
-- a deployment to dev with ES256-signed tokens
-
-All three give the same results.
-
-| Case | Result |
-| --- | --- |
-| No `Authorization` header | 400, `Bearer token authorization header missing` |
-| Token in `?access_token=` query parameter | 400. The runtime ignores the parameter. |
-| Token in `Sec-WebSocket-Protocol` | 400. The runtime ignores the header. |
-| Expired token | 403, `The token is expired since ...` |
-| Wrong signature, malformed token, or `alg: none` on a deployed service | 403 |
-| Valid token | 101, upgrade succeeds |
-| Messages after `exp` on an open socket | Delivered. The runtime does no per-message validation and does not close the socket. |
-| Same token on a new handshake after `exp` | 403 |
-| `/ws/echo-until-exp` | The socket closes at `exp` with code 1000. |
-| `requestContext().getJwtClaims()` in a WebSocket method | Works. It returns the handshake claims, which never refresh. |
-| `JwtClaims.expirationTime()` | **Always empty for a numeric `exp`** (see below) |
-
-## Ticket pattern for browser clients
-
-The browser `WebSocket` API cannot set request headers, so a browser cannot use a `@JWT` WebSocket method directly. The ticket pattern lets it still rely on `@JWT`, with no JWT signature code in the service:
-
-1. The client calls `POST /ws-ticket` with `Authorization: Bearer <jwt>`. `fetch` can set headers. `@JWT` validates the token.
-2. The endpoint stores a random 256-bit ticket in `WsTicketEntity` (a Key Value Entity), with the subject and the JWT's `exp`. The ticket is valid for `probe.ws-ticket.ttl` (30 seconds), or until `exp` if that comes first.
-3. The client opens `/ws/ticket?ticket=<ticket>` with the plain `WebSocket` API.
-4. The method redeems the ticket. The entity handles one command at a time per ticket, so a ticket works only once, even across instances.
-5. The Flow closes at the JWT's `exp`. The client then gets a new ticket with a fresh JWT.
-
-Tested in a real browser (local), with Node's standard `WebSocket` API (local and dev), and in `WsTicketIntegrationTest`:
-
-| Case | Result |
-| --- | --- |
-| Browser `new WebSocket(url, { headers })` | `SyntaxError`. The browser treats the second argument as a subprotocol. |
-| Browser socket to `/ws/echo` without the header | Fails with close code 1006. The browser does not expose the 400 status. |
-| `POST /ws-ticket` without a JWT, or with an invalid JWT | 400 or 403 |
-| Valid ticket | Socket opens and works. The subject comes from the JWT. |
-| At the JWT's `exp` | Server sends `token expired, closing connection` and closes with 1000 |
-| Same ticket again, unknown ticket, or ticket past `validUntil` | Upgrade succeeds, server sends `rejected: invalid ticket` and closes |
-| Missing ticket | Server sends `rejected: missing ticket` and closes |
-
-### Runtime gap: `HttpException` from a WebSocket method returns 500
-
-`HttpEndpointRouter` calls a `@WebSocket` method synchronously, outside the Future that `.recover(defaultErrorHandling)` covers. An `HttpException` thrown from the method is therefore not mapped to its status, and the upgrade fails with 500.
-
-This service does not throw to reject a ticket. It accepts the upgrade, sends the reason, and closes. A browser cannot read the status of a failed handshake anyway.
-
-### SDK bug: typed claim getters return empty for non-string claims
-
-In `akka.javasdk.impl.http.JwtClaimsImpl`, every typed getter (`getLong`, `getInteger`, `getDouble`, `getBoolean`, `getNumericDate`, the list getters) parses the result of `getString`.
-
-The runtime returns a value from `getStringClaim` only when the claim is a JSON string. A numeric claim therefore always returns empty. This includes `expirationTime()`, `issuedAt()` and `notBefore()`.
-
-`asMap()` reads the raw claim and works. This service reads `exp` from `asMap()` (see `TokenLifetime.fromRawExp`).
+| `/ws/echo` | `@JWT`. Echoes each message as JSON, with the claims and whether the token has expired. |
+| `/ws/echo-until-exp` | Pattern 1. Same as `/ws/echo`, and closes at the token's `exp`. |
+| `POST /ws-ticket` | Pattern 2. `@JWT`. Returns a ticket. |
+| `/ws/ticket?ticket=...` | Pattern 2. Opens with a ticket, and closes at the token's `exp`. |
+| `/ws/ticket-throws` | Throws `HttpException.forbidden()` from a WebSocket method. |
 
 ## Run the tests
 
@@ -77,44 +112,70 @@ The runtime returns a value from `getStringClaim` only when the claim is a JSON 
 mvn verify
 ```
 
-The tests run in dev mode, which accepts unsigned tokens (`alg: none`) but still checks `exp`. The testkit `WebSocketRouteTester` cannot set headers, so the tests use an akka-http WebSocket client.
+In tests and local development, the service accepts unsigned tokens (`alg: none`). It still checks `exp`.
 
 ## Run locally
+
+Start the service:
 
 ```shell
 mvn compile exec:java
 ```
 
+Open a connection with a token that expires after 4 seconds, and send messages for 10 seconds:
+
 ```shell
 node scripts/ws-probe.mjs ws://localhost:9000/ws/echo 4 10
 ```
+
+Get a ticket and connect the way a browser does:
 
 ```shell
 node scripts/ticket-probe.mjs http://localhost:9000 4
 ```
 
-The scripts need Node 22 or later for the built-in `WebSocket`. Without `JWT_PRIVATE_KEY_FILE` they send an unsigned token.
+The scripts need Node 22 or later.
 
 ## Run against a deployed service
 
-1. Create a P-256 key pair. Store the public key as a JWKS document in a secret:
+1. Deploy the service and expose it.
+
+2. Generate a key pair. This writes `probe-es256.pem` (private key) and `jwks.json` (public key):
+
+   ```shell
+   node scripts/generate-key.mjs
+   ```
+
+3. Store the public key in a secret and add it as a keyset for the service:
 
    ```shell
    akka secret create generic jwt-probe-jwks --from-file jwks.json=jwks.json
    ```
 
-2. Add the keyset:
-
    ```shell
    akka service jwks add jwt-websocket-probe --secret jwt-probe-jwks --issuer probe-issuer
    ```
 
-3. Set `enableWebsockets: true` on the route. Without it, the platform rejects the upgrade with 403.
+4. Enable WebSockets on the route. Without this, the platform refuses WebSocket connections with 403. Export the route with `akka route export <route-name>`, add `enableWebsockets: true`, and apply it with `akka route update <route-name> -f route.yaml`:
 
-4. Run the probes with signed tokens:
+   ```yaml
+   routes:
+   - prefix: /
+     enableWebsockets: true
+     route:
+       service: jwt-websocket-probe
+   ```
+
+5. Run the scripts with signed tokens:
 
    ```shell
    export JWT_PRIVATE_KEY_FILE=probe-es256.pem JWT_KID=probe-key
+   ```
+
+   ```shell
    node scripts/ws-probe.mjs wss://<hostname>/ws/echo 5 14
+   ```
+
+   ```shell
    node scripts/ticket-probe.mjs https://<hostname> 6
    ```
