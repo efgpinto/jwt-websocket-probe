@@ -1,11 +1,11 @@
 # JWT authentication for WebSocket endpoints
 
-This sample shows how `@JWT(validate = JWT.JwtMethodMode.BEARER_TOKEN)` works on a `@WebSocket` method in an Akka HTTP endpoint. It also shows two patterns for long-lived connections:
+This sample shows how `@JWT(validate = JWT.JwtMethodMode.BEARER_TOKEN)` works on a `@WebSocket` method in an Akka HTTP endpoint. It also shows the supported way today to end a connection when its token expires:
 
 - **Close at token expiry:** for clients that can set the `Authorization` header.
 - **Ticket:** for browser clients, which cannot set headers on a WebSocket. A variant also gives the WebSocket handler the user's JWT, for when it must forward the token to downstream services.
 
-The sample uses Akka SDK 3.7.0-M1. The `@JWT` behavior, pattern 1, and the basic ticket flow were also checked on a deployed service with SDK 3.6.6, with the same results.
+The sample uses Akka SDK 3.7.0-M1. The `@JWT` behavior, the approach for clients that can set the header, and the basic ticket flow for browser clients were also checked on a deployed service with SDK 3.6.6, with the same results.
 
 ## How `@JWT` works on a WebSocket method
 
@@ -23,11 +23,11 @@ The sample uses Akka SDK 3.7.0-M1. The `@JWT` behavior, pattern 1, and the basic
 
 Inside the WebSocket method, `requestContext().getJwtClaims()` returns the claims of the token used to open the connection. The claims do not change while the connection is open.
 
-To end a connection when its token expires, use one of the patterns below.
+To end a connection when its token expires, use the approach below that matches your client.
 
-## Pattern 1: close the connection at token expiry
+## Clients that can set the header
 
-Use this pattern when the client can set the `Authorization` header. Native mobile apps and backend clients can do this.
+Use this approach when the client can set the `Authorization` header. Native mobile apps and backend clients can do this.
 
 Read `exp` from the claims and complete the `Flow` at that time. Completing the `Flow` closes the WebSocket with code 1000. The client then reconnects with a new token.
 
@@ -54,7 +54,7 @@ In this sample: `/ws/echo-until-exp` in [`JwtProbeEndpoint`](src/main/java/com/e
 
 Your clients need reconnect logic in any case, because the platform also closes WebSocket connections from time to time.
 
-## Pattern 2: ticket for browser clients
+## Browser clients
 
 The browser `WebSocket` API cannot set request headers. `new WebSocket(url, { headers })` fails, and a connection without the header gets 400 from `@JWT`. The browser does not show that status: the connection only fails with close code 1006.
 
@@ -130,10 +130,10 @@ If the downstream services are other Akka services, check first whether you need
 | Path | Description |
 | --- | --- |
 | `/ws/echo` | `@JWT`. Echoes each message as JSON, with the claims and whether the token has expired. |
-| `/ws/echo-until-exp` | Pattern 1. Same as `/ws/echo`, and closes at the token's `exp`. |
-| `POST /ws-ticket` | Pattern 2. `@JWT`. Returns 201 with a ticket, or 503 when the ticket cannot be stored. |
-| `/ws/ticket?ticket=...` | Pattern 2. Opens with a ticket, and closes at the token's `exp`. |
-| `/ws/ticket-with-token?ticket=...` | Pattern 2, forwarding variant. Expects the JWT as the first message, and keeps it for downstream calls. |
+| `/ws/echo-until-exp` | Clients that can set the header. Same as `/ws/echo`, and closes at the token's `exp`. |
+| `POST /ws-ticket` | Browser clients. `@JWT`. Returns 201 with a ticket, or 503 when the ticket cannot be stored. |
+| `/ws/ticket?ticket=...` | Browser clients. Opens with a ticket, and closes at the token's `exp`. |
+| `/ws/ticket-with-token?ticket=...` | Browser clients, when the handler forwards the token. Expects the JWT as the first message, and keeps it for downstream calls. |
 | `/ws/ticket-throws` | Throws `HttpException.forbidden()` from a WebSocket method. |
 
 ## Run the tests
