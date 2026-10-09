@@ -56,21 +56,32 @@ public class JwtProbeEndpoint extends AbstractHttpEndpoint {
   @JWT(validate = JWT.JwtMethodMode.BEARER_TOKEN)
   @WebSocket("/echo-until-exp")
   public Flow<String, String, NotUsed> echoUntilExp() {
-    return tokenLifetime()
-      .remaining(Instant.now())
-      .map(remaining ->
-        echoFlow().takeWithin(remaining).concat(Source.single(CLOSING_MESSAGE))
-      )
-      .orElseGet(this::echoFlow);
+    return closeAtExp(echoFlow(), tokenLifetime());
   }
 
   private Flow<String, String, NotUsed> echoFlow() {
     // Claims come from the upgrade request. They are a snapshot and never refresh.
     var claims = requestContext().getJwtClaims();
-    var subject = claims.subject().orElse("unknown");
-    var sdkExpirationTime = claims.expirationTime().orElse(null);
-    var rawClaims = new TreeMap<>(claims.asMap());
-    var lifetime = tokenLifetime();
+    return echoFlow(
+      claims.subject().orElse("unknown"),
+      tokenLifetime(),
+      claims.expirationTime().orElse(null),
+      new TreeMap<>(claims.asMap())
+    );
+  }
+
+  // JwtClaims.expirationTime() returns empty for a numeric "exp" claim, so read the raw value.
+  private TokenLifetime tokenLifetime() {
+    var raw = requestContext().getJwtClaims().asMap().get("exp");
+    return TokenLifetime.fromRawExp(Optional.ofNullable(raw));
+  }
+
+  static Flow<String, String, NotUsed> echoFlow(
+    String subject,
+    TokenLifetime lifetime,
+    Instant sdkExpirationTime,
+    Map<String, String> claims
+  ) {
     return Flow.of(String.class)
       .zipWithIndex()
       .map(pair -> {
@@ -83,15 +94,20 @@ public class JwtProbeEndpoint extends AbstractHttpEndpoint {
           sdkExpirationTime,
           now,
           lifetime.isExpired(now),
-          rawClaims
+          claims
         );
         return JsonSupport.encodeToString(reply);
       });
   }
 
-  // JwtClaims.expirationTime() returns empty for a numeric "exp" claim, so read the raw value.
-  private TokenLifetime tokenLifetime() {
-    var raw = requestContext().getJwtClaims().asMap().get("exp");
-    return TokenLifetime.fromRawExp(Optional.ofNullable(raw));
+  /** Completes the Flow at "exp", which closes the WebSocket. No "exp" means no deadline. */
+  static Flow<String, String, NotUsed> closeAtExp(
+    Flow<String, String, NotUsed> flow,
+    TokenLifetime lifetime
+  ) {
+    return lifetime
+      .remaining(Instant.now())
+      .map(remaining -> flow.takeWithin(remaining).concat(Source.single(CLOSING_MESSAGE)))
+      .orElse(flow);
   }
 }
