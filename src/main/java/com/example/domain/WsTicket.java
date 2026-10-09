@@ -1,5 +1,6 @@
 package com.example.domain;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -9,34 +10,23 @@ import java.util.Optional;
  * @param subject "sub" claim of the JWT that was used to issue the ticket
  * @param validUntil the ticket must be redeemed before this time
  * @param tokenExpiresAt "exp" claim of that JWT. The WebSocket must close at this time.
- * @param redeemedAt set when the ticket is used
  */
-public record WsTicket(
-  String subject,
-  Instant validUntil,
-  Optional<Instant> tokenExpiresAt,
-  Optional<Instant> redeemedAt
-) {
-  public static WsTicket issue(String subject, Instant validUntil, Optional<Instant> tokenExpiresAt) {
-    return new WsTicket(subject, validUntil, tokenExpiresAt, Optional.empty());
-  }
+public record WsTicket(String subject, Instant validUntil, Optional<Instant> tokenExpiresAt) {
 
-  public boolean isRedeemed() {
-    return redeemedAt.isPresent();
-  }
+  private static final Duration MIN_TIME_TO_LIVE = Duration.ofSeconds(1);
 
   public boolean isExpired(Instant now) {
     return !now.isBefore(validUntil);
   }
 
-  public WsTicket redeem(Instant now) {
-    if (isRedeemed()) throw new IllegalStateException("ticket already used");
-    if (isExpired(now)) throw new IllegalStateException("ticket expired");
-    return new WsTicket(subject, validUntil, tokenExpiresAt, Optional.of(now));
+  /** How long to keep the stored ticket. Never zero or negative. */
+  public Duration timeToLive(Instant now) {
+    var left = Duration.between(now, validUntil);
+    return left.compareTo(MIN_TIME_TO_LIVE) < 0 ? MIN_TIME_TO_LIVE : left;
   }
 
   /** The ticket ends at the configured TTL, or earlier when the JWT expires first. */
-  public static Instant validUntil(Instant now, java.time.Duration ttl, Optional<Instant> tokenExpiresAt) {
+  public static Instant validUntil(Instant now, Duration ttl, Optional<Instant> tokenExpiresAt) {
     var byTtl = now.plus(ttl);
     return tokenExpiresAt.filter(exp -> exp.isBefore(byTtl)).orElse(byTtl);
   }

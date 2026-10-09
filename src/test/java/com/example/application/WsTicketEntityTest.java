@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import akka.Done;
 import akka.javasdk.testkit.KeyValueEntityTestKit;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -15,24 +16,37 @@ public class WsTicketEntityTest {
   }
 
   @Test
-  public void redeemsAnIssuedTicketOnce() {
+  public void issuedTicketExpiresAtValidUntil() {
     var testKit = KeyValueEntityTestKit.of("ticket-1", WsTicketEntity::new);
-    var issued = testKit.method(WsTicketEntity::issue).invoke(issue(Instant.now().plusSeconds(30)));
-    assertThat(issued.getReply()).isEqualTo(Done.getInstance());
 
-    var first = testKit.method(WsTicketEntity::redeem).invoke();
-    assertThat(first.isError()).isFalse();
-    assertThat(first.getReply().subject()).isEqualTo("alice");
-    assertThat(first.getReply().isRedeemed()).isTrue();
+    var result = testKit.method(WsTicketEntity::issue).invoke(issue(Instant.now().plusSeconds(30)));
 
-    var second = testKit.method(WsTicketEntity::redeem).invoke();
-    assertThat(second.isError()).isTrue();
-    assertThat(second.getError()).isEqualTo("ticket already used");
+    assertThat(result.getReply()).isEqualTo(Done.getInstance());
+    assertThat(result.getExpireAfter()).hasValueSatisfying(ttl ->
+      assertThat(ttl).isBetween(Duration.ofSeconds(29), Duration.ofSeconds(30))
+    );
   }
 
   @Test
-  public void rejectsAnExpiredTicket() {
+  public void redeemingDeletesTheTicket() {
     var testKit = KeyValueEntityTestKit.of("ticket-2", WsTicketEntity::new);
+    testKit.method(WsTicketEntity::issue).invoke(issue(Instant.now().plusSeconds(30)));
+
+    var first = testKit.method(WsTicketEntity::redeem).invoke();
+
+    assertThat(first.isError()).isFalse();
+    assertThat(first.getReply().subject()).isEqualTo("alice");
+    assertThat(first.stateWasDeleted()).isTrue();
+    assertThat(testKit.isDeleted()).isTrue();
+
+    var second = testKit.method(WsTicketEntity::redeem).invoke();
+    assertThat(second.isError()).isTrue();
+    assertThat(second.getError()).isEqualTo("ticket no longer valid");
+  }
+
+  @Test
+  public void rejectsAnExpiredTicketThatIsStillStored() {
+    var testKit = KeyValueEntityTestKit.of("ticket-3", WsTicketEntity::new);
     testKit.method(WsTicketEntity::issue).invoke(issue(Instant.now().minusSeconds(1)));
 
     var result = testKit.method(WsTicketEntity::redeem).invoke();
@@ -43,7 +57,7 @@ public class WsTicketEntityTest {
 
   @Test
   public void rejectsAnUnknownTicket() {
-    var testKit = KeyValueEntityTestKit.of("ticket-3", WsTicketEntity::new);
+    var testKit = KeyValueEntityTestKit.of("ticket-4", WsTicketEntity::new);
 
     var result = testKit.method(WsTicketEntity::redeem).invoke();
 
@@ -53,7 +67,7 @@ public class WsTicketEntityTest {
 
   @Test
   public void doesNotIssueTheSameTicketTwice() {
-    var testKit = KeyValueEntityTestKit.of("ticket-4", WsTicketEntity::new);
+    var testKit = KeyValueEntityTestKit.of("ticket-5", WsTicketEntity::new);
     testKit.method(WsTicketEntity::issue).invoke(issue(Instant.now().plusSeconds(30)));
 
     var result = testKit.method(WsTicketEntity::issue).invoke(issue(Instant.now().plusSeconds(30)));

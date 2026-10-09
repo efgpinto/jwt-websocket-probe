@@ -28,4 +28,18 @@ public class WsTicketTest {
   public void validUntilUsesTheTtlWhenTheTokenHasNoExp() {
     assertThat(WsTicket.validUntil(now, ttl, Optional.empty())).isEqualTo(now.plusSeconds(30));
   }
+
+  @Test
+  public void timeToLiveIsTheTimeLeftUntilValidUntil() {
+    var ticket = new WsTicket("alice", now.plusSeconds(30), Optional.empty());
+
+    assertThat(ticket.timeToLive(now)).isEqualTo(Duration.ofSeconds(30));
+  }
+
+  @Test
+  public void timeToLiveIsNeverZeroOrNegative() {
+    var ticket = new WsTicket("alice", now.minusSeconds(5), Optional.empty());
+
+    assertThat(ticket.timeToLive(now)).isEqualTo(Duration.ofSeconds(1));
+  }
 }
