@@ -1,85 +1,83 @@
-# Hello world agent
+# JWT WebSocket probe
 
-This sample uses an agent and LLM to generate greetings in different languages. It illustrates how the agent maintains contextual history in a session memory.
+This service tests how `@JWT(validate = JWT.JwtMethodMode.BEARER_TOKEN)` behaves on an HTTP endpoint `@WebSocket` method.
 
-This sample is explained in [Author your first agentic service](https://doc.akka.io/getting-started/author-your-first-service.html).
+## Endpoints
 
-To understand the Akka concepts that are the basis for this example, see [Development Process](https://doc.akka.io/concepts/development-process.html) in the documentation.
+| Path | Behavior |
+| --- | --- |
+| `/ws/echo` | `@JWT` only. Echoes each message as JSON, with the claims and whether the token has expired since the handshake. |
+| `/ws/echo-until-exp` | Same, but the Flow completes at the `exp` claim. Completing the Flow closes the WebSocket. |
 
-This project contains the skeleton to create an Akka service. To understand more about these components, see [Developing services](https://doc.akka.io/sdk/index.html).
+## Results
 
----
+Tested with Akka SDK 3.6.6 (runtime 1.6.17) in three ways:
+- the integration tests (`mvn verify`)
+- the service running locally
+- a deployment to dev with ES256-signed tokens
 
-### Secure Repository Token
+All three give the same results.
 
-Building requires a secure repository token, which is set up as part of [Akka CLI](https://doc.akka.io/getting-started/quick-install-cli.html)'s `akka code init` command.
+| Case | Result |
+| --- | --- |
+| No `Authorization` header | 400, `Bearer token authorization header missing` |
+| Token in `?access_token=` query parameter | 400. The runtime ignores the parameter. |
+| Token in `Sec-WebSocket-Protocol` | 400. The runtime ignores the header. |
+| Expired token | 403, `The token is expired since ...` |
+| Wrong signature, malformed token, or `alg: none` on a deployed service | 403 |
+| Valid token | 101, upgrade succeeds |
+| Messages after `exp` on an open socket | Delivered. The runtime does no per-message validation and does not close the socket. |
+| Same token on a new handshake after `exp` | 403 |
+| `/ws/echo-until-exp` | The socket closes at `exp` with code 1000. |
+| `requestContext().getJwtClaims()` in a WebSocket method | Works. It returns the handshake claims, which never refresh. |
+| `JwtClaims.expirationTime()` | **Always empty for a numeric `exp`** (see below) |
 
-If you still need to configure your system with the token there are two additional ways:
+### SDK bug: typed claim getters return empty for non-string claims
 
-1. Use the Akka CLI's `akka code token` command and follow the instructions.
-2. Set up the token manually as described [here](https://account.akka.io/token).
+In `akka.javasdk.impl.http.JwtClaimsImpl`, every typed getter (`getLong`, `getInteger`, `getDouble`, `getBoolean`, `getNumericDate`, the list getters) parses the result of `getString`.
 
----
+The runtime returns a value from `getStringClaim` only when the claim is a JSON string. A numeric claim therefore always returns empty. This includes `expirationTime()`, `issuedAt()` and `notBefore()`.
 
-Use Maven to build your project:
+`asMap()` reads the raw claim and works. This service reads `exp` from `asMap()` (see `TokenLifetime.fromRawExp`).
+
+## Run the tests
 
 ```shell
-mvn compile
+mvn verify
 ```
 
-When running an Akka service locally.
+The tests run in dev mode, which accepts unsigned tokens (`alg: none`) but still checks `exp`. The testkit `WebSocketRouteTester` cannot set headers, so the tests use an akka-http WebSocket client.
 
-This sample is using OpenAI. Other AI models can be configured, see [Agent model provider](https://doc.akka.io/sdk/agents.html#_model).
-
-Set your [OpenAI API key](https://platform.openai.com/api-keys) as an environment variable:
-
-- On Linux or macOS:
-  ```shell
-  export OPENAI_API_KEY=your-openai-api-key
-  ```
-
-- On Windows (command prompt):
-  ```shell
-  set OPENAI_API_KEY=your-openai-api-key
-  ```
-  
-Or change the `application.conf` file to use a different model provider.
-
-To start your service locally, run:
+## Run locally
 
 ```shell
 mvn compile exec:java
 ```
 
-This command will start your Akka service. With your Akka service running, the endpoint is available at:
-
 ```shell
-curl -i -XPOST --location "http://localhost:9000/hello" \
-    --header "Content-Type: application/json" \
-    --data '{"user": "alice", "text": "Hello, I am Alice"}'
+node scripts/ws-probe.mjs ws://localhost:9000/ws/echo 4 10
 ```
 
-You can use the [Akka Console](https://console.akka.io) to create a project and see the status of your service.
+The script needs Node 22 or later for the built-in `WebSocket`. Without `JWT_PRIVATE_KEY_FILE` it sends an unsigned token.
 
-Build container image:
+## Run against a deployed service
 
-```shell
-mvn clean install -DskipTests
-```
+1. Create a P-256 key pair. Store the public key as a JWKS document in a secret:
 
-Install the `akka` CLI as documented in [Install Akka CLI](https://doc.akka.io/operations/cli/installation.html).
+   ```shell
+   akka secret create generic jwt-probe-jwks --from-file jwks.json=jwks.json
+   ```
 
-Set up secret containing OpenAI API key:
+2. Add the keyset:
 
-```shell
-akka secret create generic openai-api --literal key=$OPENAI_API_KEY
-```
+   ```shell
+   akka service jwks add jwt-websocket-probe --secret jwt-probe-jwks --issuer probe-issuer
+   ```
 
-Deploy the service using the image tag from above `mvn install` and the secret:
+3. Set `enableWebsockets: true` on the route. Without it, the platform rejects the upgrade with 403.
 
-```shell
-akka service deploy helloworld-agent helloworld-agent:tag-name --push \
-  --secret-env OPENAI_API_KEY=openai-api/key
-```
+4. Run the probe with signed tokens:
 
-Refer to [Deploy and manage services](https://doc.akka.io/operations/services/deploy-service.html) for more information.
+   ```shell
+   JWT_PRIVATE_KEY_FILE=probe-es256.pem JWT_KID=probe-key node scripts/ws-probe.mjs wss://<hostname>/ws/echo 5 14
+   ```
