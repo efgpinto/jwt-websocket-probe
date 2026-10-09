@@ -102,8 +102,8 @@ public class JwtWebSocketIntegrationTest extends TestKitSupport {
 
     // The raw claim is there, but the typed SDK getter does not see it.
     assertThat(reply.claims()).containsEntry("exp", claims.get("exp").toString());
-    assertThat(reply.expiresAt()).isEqualTo(exp(claims));
-    assertThat(reply.sdkExpirationTime()).isNull();
+    assertThat(reply.expiresAt()).contains(exp(claims));
+    assertThat(reply.sdkExpirationTime()).isEmpty();
     conn.publisher().sendComplete();
   }
 

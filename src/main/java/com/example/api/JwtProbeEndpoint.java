@@ -38,8 +38,8 @@ public class JwtProbeEndpoint extends AbstractHttpEndpoint {
     long seq,
     String subject,
     String message,
-    Instant expiresAt,
-    Instant sdkExpirationTime,
+    Optional<Instant> expiresAt,
+    Optional<Instant> sdkExpirationTime,
     Instant now,
     boolean tokenExpired,
     Map<String, String> claims
@@ -65,7 +65,7 @@ public class JwtProbeEndpoint extends AbstractHttpEndpoint {
     return echoFlow(
       claims.subject().orElse("unknown"),
       tokenLifetime(),
-      claims.expirationTime().orElse(null),
+      claims.expirationTime(),
       new TreeMap<>(claims.asMap())
     );
   }
@@ -79,7 +79,7 @@ public class JwtProbeEndpoint extends AbstractHttpEndpoint {
   static Flow<String, String, NotUsed> echoFlow(
     String subject,
     TokenLifetime lifetime,
-    Instant sdkExpirationTime,
+    Optional<Instant> sdkExpirationTime,
     Map<String, String> claims
   ) {
     return Flow.of(String.class)
@@ -90,7 +90,7 @@ public class JwtProbeEndpoint extends AbstractHttpEndpoint {
           pair.second() + 1,
           subject,
           pair.first(),
-          lifetime.expiresAt().orElse(null),
+          lifetime.expiresAt(),
           sdkExpirationTime,
           now,
           lifetime.isExpired(now),

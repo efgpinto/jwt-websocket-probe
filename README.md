@@ -41,7 +41,11 @@ public Flow<String, String, NotUsed> socket() {
     .map(raw -> Instant.ofEpochSecond(Long.parseLong(raw)));
   var flow = Flow.of(String.class).map(this::handle);
   return exp
-    .map(e -> flow.takeWithin(Duration.between(Instant.now(), e)))
+    .map(e -> {
+      var remaining = Duration.between(Instant.now(), e);
+      // "exp" can pass between the token check and this line.
+      return flow.takeWithin(remaining.isNegative() ? Duration.ZERO : remaining);
+    })
     .orElse(flow);
 }
 ```
@@ -67,7 +71,9 @@ Ticket rules in this sample:
 - A ticket works once. A second attempt with the same ticket is refused, also when the service runs on more than one instance.
 - A ticket must be used within 30 seconds, or before the token's `exp` if that comes first. Set the time with `probe.ws-ticket.ttl` in `application.conf`.
 - A used ticket is deleted. An unused ticket is deleted automatically after it expires (`expireAfter` on the Key Value Entity).
-- When a ticket is missing, unknown, used, or expired, the connection opens, the service sends `rejected: <reason>`, and then closes the connection. See "Known limitations" for why it does not return an HTTP error.
+- When a ticket is missing, unknown, used, or expired, the connection opens, the service sends `rejected: invalid ticket` (or `rejected: missing ticket`), and then closes the connection. See "Known limitations" for why it does not return an HTTP error.
+- When the service cannot check a ticket, for example after a timeout, it sends `rejected: temporarily unavailable, try again` and closes. The ticket may already be used, so the client gets a new ticket and reconnects.
+- `POST /ws-ticket` returns 201 with the ticket. If the service cannot store the ticket, it returns 503. The client then calls again. A ticket is returned only after it is stored, so a client never receives a ticket that does not work.
 
 What the browser code looks like:
 
@@ -102,7 +108,7 @@ The ticket is part of the URL, so it can appear in access logs. It is short-live
 | --- | --- |
 | `/ws/echo` | `@JWT`. Echoes each message as JSON, with the claims and whether the token has expired. |
 | `/ws/echo-until-exp` | Pattern 1. Same as `/ws/echo`, and closes at the token's `exp`. |
-| `POST /ws-ticket` | Pattern 2. `@JWT`. Returns a ticket. |
+| `POST /ws-ticket` | Pattern 2. `@JWT`. Returns 201 with a ticket, or 503 when the ticket cannot be stored. |
 | `/ws/ticket?ticket=...` | Pattern 2. Opens with a ticket, and closes at the token's `exp`. |
 | `/ws/ticket-throws` | Throws `HttpException.forbidden()` from a WebSocket method. |
 

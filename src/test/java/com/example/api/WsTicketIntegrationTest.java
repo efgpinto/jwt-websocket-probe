@@ -53,18 +53,18 @@ public class WsTicketIntegrationTest extends TestKitSupport {
     var ticket = issueTicket(claims("alice", 60));
     var conn = ws.connect("/ws/ticket?ticket=" + ticket.ticket(), Optional.empty());
 
-    expectRejected("/ws/ticket?ticket=" + ticket.ticket(), "invalid ticket");
+    expectRejected("/ws/ticket?ticket=" + ticket.ticket(), WsTicketEndpoint.INVALID_TICKET);
     conn.publisher().sendComplete();
   }
 
   @Test
   public void unknownTicketIsRejected() {
-    expectRejected("/ws/ticket?ticket=made-up", "invalid ticket");
+    expectRejected("/ws/ticket?ticket=made-up", WsTicketEndpoint.INVALID_TICKET);
   }
 
   @Test
   public void missingTicketIsRejected() {
-    expectRejected("/ws/ticket", "missing ticket");
+    expectRejected("/ws/ticket", WsTicketEndpoint.MISSING_TICKET);
   }
 
   @Test
@@ -75,7 +75,7 @@ public class WsTicketIntegrationTest extends TestKitSupport {
 
     sleepUntil(exp(claims).plusSeconds(1));
 
-    expectRejected("/ws/ticket?ticket=" + ticket.ticket(), "invalid ticket");
+    expectRejected("/ws/ticket?ticket=" + ticket.ticket(), WsTicketEndpoint.INVALID_TICKET);
   }
 
   /** Documents a runtime gap: HttpException thrown from a WebSocket method is not mapped. */
@@ -107,11 +107,12 @@ public class WsTicketIntegrationTest extends TestKitSupport {
   }
 
   private TicketResponse issueTicket(Map<String, Object> claims) {
-    return httpClient
+    var response = httpClient
       .POST("/ws-ticket")
       .addHeader("Authorization", bearer(claims))
       .responseBodyAs(TicketResponse.class)
-      .invoke()
-      .body();
+      .invoke();
+    assertThat(response.status().intValue()).isEqualTo(201);
+    return response.body();
   }
 }
