@@ -5,7 +5,7 @@ This sample shows how `@JWT(validate = JWT.JwtMethodMode.BEARER_TOKEN)` works on
 - **Close at token expiry:** for clients that can set the `Authorization` header.
 - **Ticket:** for browser clients, which cannot set headers on a WebSocket. A variant also gives the WebSocket handler the user's JWT, for when it must forward the token to downstream services.
 
-The sample was tested with Akka SDK 3.6.6. The `@JWT` behavior, pattern 1, and the basic ticket flow were also checked on a deployed service.
+The sample uses Akka SDK 3.7.0-M1. The `@JWT` behavior, pattern 1, and the basic ticket flow were also checked on a deployed service with SDK 3.6.6, with the same results.
 
 ## How `@JWT` works on a WebSocket method
 
@@ -113,9 +113,9 @@ In this sample: `ticketWithTokenSocket()` in [`WsTicketEndpoint`](src/main/java/
 
 If the downstream services are other Akka services, check first whether you need the user's token at all. Service-to-service access control (`@Acl`) plus the subject from the ticket is often enough.
 
-## Implementation notes (Akka SDK 3.6.6)
+## Implementation notes (Akka SDK 3.7.0-M1)
 
-**Read `exp` from `asMap()`.** In SDK 3.6.6, `JwtClaims.expirationTime()` returns empty. So do `issuedAt()`, `notBefore()` and the other getters for claims that are not strings, such as `getLong()`. This sample reads the raw value from `asMap()` in [`TokenLifetime`](src/main/java/com/example/domain/TokenLifetime.java).
+**Read `exp` from `asMap()`.** In SDK 3.7.0-M1, `JwtClaims.expirationTime()` returns empty. So do `issuedAt()`, `notBefore()` and the other getters for claims that are not strings, such as `getLong()`. This sample reads the raw value from `asMap()` in [`TokenLifetime`](src/main/java/com/example/domain/TokenLifetime.java).
 
 **Refuse a WebSocket connection by completing the `Flow`.** An `HttpException` thrown from a `@WebSocket` method returns 500, whatever status it carries. To refuse a connection with a clear reason, return a `Flow` that sends the reason and completes. `/ws/ticket-throws` shows the behavior of a thrown exception.
 

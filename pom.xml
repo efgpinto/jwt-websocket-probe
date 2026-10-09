@@ -4,7 +4,7 @@
   <parent>
     <groupId>io.akka</groupId>
     <artifactId>akka-javasdk-parent</artifactId>
-    <version>3.6.6</version>
+    <version>3.7.0-M1</version>
   </parent>
   
   <groupId>com.example</groupId>
@@ -15,7 +15,7 @@
   <name>jwt-websocket-probe</name>
 
   <properties>
-    <!-- akka-javasdk-parent 3.6.6 uses surefire 2.22.2, which finds no JUnit 5.14 tests. Fixed in akka-sdk #2015. -->
+    <!-- The 3.7.0-M1 parent uses surefire 2.22.2, which finds no JUnit 5.14 tests. Remove when the parent uses surefire 3.x. -->
     <maven-surefire-plugin.version>3.1.2</maven-surefire-plugin.version>
   </properties>
 
