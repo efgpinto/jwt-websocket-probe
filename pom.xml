@@ -14,6 +14,11 @@
 
   <name>jwt-websocket-probe</name>
 
+  <properties>
+    <!-- akka-javasdk-parent 3.6.6 uses surefire 2.22.2, which finds no JUnit 5.14 tests. Fixed in akka-sdk #2015. -->
+    <maven-surefire-plugin.version>3.1.2</maven-surefire-plugin.version>
+  </properties>
+
   <dependencies>
     <!-- Your dependencies go here -->
   </dependencies>
